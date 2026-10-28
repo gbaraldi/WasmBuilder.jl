@@ -58,10 +58,6 @@ function show_imm(io::IO, kind::Symbol, @nospecialize(x))
         show_types(io, x)
     elseif kind === :ref || kind === :refnull
         show_valtype(io, RefType(x, kind === :refnull))
-    elseif kind === :align
-        print(io, "align=", 1 << x)
-    elseif kind === :offset
-        print(io, "offset=", x)
     elseif kind === :memidx
         print(io, x)
     elseif kind === :labels
@@ -95,6 +91,12 @@ function show_inst(io::IO, i::Inst)
         show_valtype(io, RefType(h1, flags & 1 != 0))
         print(io, " ")
         show_valtype(io, RefType(h2, flags & 2 != 0))
+    elseif haskey(MEMORY_ACCESSES, i.op)
+        # memarg: the offset, then the alignment, each written when not the default
+        align, offset = i.imm
+        print(io, info.text)
+        offset == 0 || print(io, " offset=", offset)
+        align == MEMORY_ACCESSES[i.op] || print(io, " align=", 1 << align)
     else
         print(io, info.text)
         foreach((k, x) -> show_imm(io, k, x), info.imms, i.imm)

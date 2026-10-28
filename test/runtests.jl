@@ -560,12 +560,15 @@ end
     @test fails(b -> (emit!(b, :i32_const, 0); emit!(b, :i32_load, 3, 0); emit!(b, :drop)), m)  # over-aligned
     @test fails(b -> (emit!(b, :i32_const, 0); emit!(b, :i64_const, 1); emit!(b, :i32_store, 2, 0)), m)
     @test fails(b -> (emit!(b, :memory_size, 1); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :memory_size, 0.0); emit!(b, :drop)), m)
     # an i64 at 24 (offset 8 from 16), a byte at 3 (offset 3 from 0), read back and added
     build(m, "rw", ValType[I64], ValType[I64]) do b
         emit!(b, :i32_const, 16); emit!(b, :local_get, 0); emit!(b, :i64_store, 3, 8)
         emit!(b, :i32_const, 0); emit!(b, :i32_const, 0x1ff); emit!(b, :i32_store8, 0, 3)
         emit!(b, :i32_const, 24); emit!(b, :i64_load, 3, 0)
         emit!(b, :i32_const, 3); emit!(b, :i64_load8_u, 0, 0)
+        emit!(b, :i64_add)
+        emit!(b, :i32_const, 0); emit!(b, :i32_load, 0, 4); emit!(b, :i64_extend_i32_u)   # under-aligned
         emit!(b, :i64_add)
     end
     build(m, "grow", ValType[], ValType[I32]) do b
@@ -574,15 +577,23 @@ end
     add_export!(m, "memory", mem)
     bytes = to_bytes(m)
     @test checkvalid(bytes)
+    # (the i32 at 4 holds bytes 4..7 of memory: 0)
     @test node_run(bytes, "console.log(e.rw(40n), e.grow(), e.memory.buffer.byteLength, new Uint8Array(e.memory.buffer)[24])") ==
           "295n 2 131072 40"
     enc(i) = (io = IOBuffer(); W.write_inst(io, i); take!(io))
     @test enc(Inst(:i64_store, 3, 8)) == [0x37, 0x03, 0x08]
     @test enc(Inst(:memory_grow, 0)) == [0x40, 0x00]
     wat = sprint(print_wat, m)
-    for s in ["(memory 1 2)", "i64.store align=8 offset=8", "i32.store8 align=1 offset=3",
-              "memory.grow 0", "(export \"memory\" (memory 0))"]
+    # memargs as in the text format (offset, then alignment, each only when not the default)
+    memargs = ["i64.store offset=8", "i32.store8 offset=3", "i32.load offset=4 align=1", "i64.load8_u\n"]
+    for s in [memargs; ["(memory 1 2)", "memory.grow 0", "(export \"memory\" (memory 0))"]]
         @test occursin(s, wat)
+    end
+    if HAS_WASM_TOOLS   # as wasm-tools writes them
+        ref = W.disassemble(bytes)
+        for s in memargs
+            @test occursin(s, ref)
+        end
     end
     # limits, and exporting a memory not the module's
     m2 = WModule()

@@ -525,7 +525,7 @@ end
 
 function imm_ok(m::WModule, kind::Symbol, @nospecialize(x))
     (kind === :u32 || kind === :align || kind === :offset) && return x isa Integer && 0 <= x <= typemax(UInt32)
-    kind === :memidx && return x == 0
+    kind === :memidx && return x isa Integer && x == 0
     kind === :i32 && return x isa Integer && typemin(Int32) <= x <= typemax(UInt32)
     kind === :i64 && return x isa Integer && typemin(Int64) <= x <= typemax(UInt64)
     (kind === :f32 || kind === :f64) && return x isa Real
