@@ -524,7 +524,8 @@ function check_field_read(b, op, f::FieldType)
 end
 
 function imm_ok(m::WModule, kind::Symbol, @nospecialize(x))
-    kind === :u32 && return x isa Integer && 0 <= x <= typemax(UInt32)
+    (kind === :u32 || kind === :align || kind === :offset) && return x isa Integer && 0 <= x <= typemax(UInt32)
+    kind === :memidx && return x == 0
     kind === :i32 && return x isa Integer && typemin(Int32) <= x <= typemax(UInt32)
     kind === :i64 && return x isa Integer && typemin(Int64) <= x <= typemax(UInt64)
     (kind === :f32 || kind === :f64) && return x isa Real
@@ -549,6 +550,11 @@ function typecheck!(b::Builder, op::Symbol, imms)
     info = get(INSTRUCTIONS, op, nothing)
     info === nothing && verr(b, op, "unknown instruction")
     check_imms(b, op, info, imms)
+    if haskey(MEMORY_ACCESSES, op) || op === :memory_size || op === :memory_grow
+        m.memory === nothing && verr(b, op, "the module has no memory")
+        a = get(MEMORY_ACCESSES, op, nothing)
+        a === nothing || imms[1] <= a || verr(b, op, "alignment 2^$(imms[1]) exceeds the natural alignment 2^$a")
+    end
     if info.sig !== nothing
         pop_ts!(b, op, info.sig[1])
         push_ts!(b, info.sig[2])

@@ -58,6 +58,12 @@ function show_imm(io::IO, kind::Symbol, @nospecialize(x))
         show_types(io, x)
     elseif kind === :ref || kind === :refnull
         show_valtype(io, RefType(x, kind === :refnull))
+    elseif kind === :align
+        print(io, "align=", 1 << x)
+    elseif kind === :offset
+        print(io, "offset=", x)
+    elseif kind === :memidx
+        print(io, x)
     elseif kind === :labels
         join(io, x, " ")
     elseif kind === :catches
@@ -121,6 +127,8 @@ function print_wat(io::IO, m::WModule)
         println(io, "))")
     end
     println(io, "  )")
+    mem = m.memory
+    mem === nothing || println(io, "  (memory ", mem.min, mem.max === nothing ? "" : " $(mem.max)", ")")
     for g in m.globals
         print(io, "  (global \$", g.name, " ", g.mutable ? "(mut " : "")
         show_valtype(io, g.type)
@@ -151,8 +159,8 @@ function print_wat(io::IO, m::WModule)
         println(io, "  )")
     end
     for (name, item) in m.exports
-        println(io, "  (export \"", name, "\" ", item isa Func ? "(func \$" : item isa Global ? "(global \$" : "(tag ",
-                item isa Tag ? item.idx : item.name, "))")
+        println(io, "  (export \"", name, "\" ", item isa Func ? "(func \$" : item isa Global ? "(global \$" :
+                item isa LinearMemory ? "(memory " : "(tag ", item isa Tag ? item.idx : item isa LinearMemory ? 0 : item.name, "))")
     end
     m.start === nothing || println(io, "  (start \$", m.start.name, ")")
     println(io, ")")

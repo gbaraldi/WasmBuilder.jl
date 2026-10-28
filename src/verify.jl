@@ -1,5 +1,5 @@
 # The validity of a module beyond its function bodies (which the builder validates):
-# type definitions, global initializers, exports, tags and the start function.
+# type definitions, global initializers, exports, tags, the memory and the start function.
 
 merr(item::AbstractString, op::Symbol, msg) =
     throw(WasmValidationError(item, 0, op, msg, Any[]))
@@ -17,8 +17,8 @@ const CONST_OPS = Set([:i32_const, :i64_const, :f32_const, :f64_const, :ref_null
 Check the validity of the module beyond its function bodies (validated by the
 [`Builder`](@ref) as they are emitted): type definitions and their declared supertypes,
 global initializers (constant expressions of the global's type, reading only earlier
-immutable globals), tags, exports (unique names) and the start function (of type
-`[] -> []`). Throws a [`WasmValidationError`](@ref); [`to_bytes`](@ref) calls it.
+immutable globals), tags, the memory's limits, exports (unique names) and the start
+function (of type `[] -> []`). Throws a [`WasmValidationError`](@ref); [`to_bytes`](@ref) calls it.
 """
 function verify(m::WModule)
     for (i, t) in enumerate(m.types)
@@ -44,14 +44,19 @@ function verify(m::WModule)
         valid_valtype(m, g.type) || merr(item, :global, "invalid type $(g.type)")
         verify_const(m, item, g.init, g.type, i - 1)
     end
+    mem = m.memory
+    if mem !== nothing
+        0 <= mem.min <= 65536 && (mem.max === nothing || mem.min <= mem.max <= 65536) ||
+            merr("memory", :memory, "invalid limits $(mem.min)..$(something(mem.max, "")) (pages of 64 KiB, at most 65536)")
+    end
     names = Set{String}()
     for (name, item) in m.exports
         where = "export \"$name\""
         name in names && merr(where, :export, "duplicate export name")
         push!(names, name)
         item isa Func && item in funcs || item isa Global && item in globals ||
-            item isa Tag && item in tags ||
-            merr(where, :export, "not a function, global or tag of the module")
+            item isa Tag && item in tags || item isa LinearMemory && item === mem ||
+            merr(where, :export, "not a function, global, tag or the memory of the module")
     end
     s = m.start
     if s !== nothing

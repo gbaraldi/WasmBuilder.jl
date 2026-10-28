@@ -1,5 +1,5 @@
 # A WebAssembly module under construction: its types, functions (with their bodies as
-# lists of instructions), globals, tags, data segments and exports. Function and global
+# lists of instructions), globals, tags, linear memory, data segments and exports. Function and global
 # indices are assigned when the module is written, so that imports and definitions can
 # be added in any order.
 
@@ -48,6 +48,12 @@ mutable struct Tag
     type::TypeRef
 end
 
+"The module's linear memory: its limits, in pages of 64 KiB."
+mutable struct LinearMemory
+    min::Int
+    max::Union{Nothing,Int}
+end
+
 """
     WModule()
 
@@ -61,6 +67,8 @@ mutable struct WModule
     funcs::Vector{Func}
     globals::Vector{Global}
     tags::Vector{Tag}
+    "The linear memory, if the module has one (one at most)."
+    memory::Union{Nothing,LinearMemory}
     datas::Vector{Vector{UInt8}}
     exports::Vector{Tuple{String,Any}}
     start::Union{Nothing,Func}
@@ -70,7 +78,7 @@ mutable struct WModule
 end
 
 WModule() = WModule(SubType[], Dict{Tuple{Vector{ValType},Vector{ValType}},TypeRef}(),
-                    Func[], Global[], Tag[], Vector{UInt8}[], Tuple{String,Any}[], nothing,
+                    Func[], Global[], Tag[], nothing, Vector{UInt8}[], Tuple{String,Any}[], nothing,
                     Func[], Set{Func}())
 
 "Add the type definition `t`, returning a reference to it."
@@ -134,13 +142,24 @@ function add_tag!(m::WModule, params::Vector{ValType})
     return t
 end
 
+"""
+    add_memory!(m, min; max=nothing) -> LinearMemory
+
+Add the module's linear memory, of `min` pages of 64 KiB (growing to at most `max`). A
+module has one memory at most; the load and store instructions address it.
+"""
+function add_memory!(m::WModule, min::Integer; max::Union{Nothing,Integer}=nothing)
+    m.memory === nothing || throw(ArgumentError("the module has a memory already"))
+    return m.memory = LinearMemory(min, max)
+end
+
 "Add a passive data segment, returning its index."
 function add_data!(m::WModule, bytes::Vector{UInt8})
     push!(m.datas, bytes)
     return length(m.datas) - 1
 end
 
-"Export `item` (a `Func`, `Global` or `Tag`) as `name`."
+"Export `item` (a `Func`, `Global`, `Tag` or the `LinearMemory`) as `name`."
 add_export!(m::WModule, name::AbstractString, item) = push!(m.exports, (String(name), item))
 
 "Declare `f` as referenced by `ref.func`."

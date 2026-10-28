@@ -111,7 +111,7 @@ function write_blocktype(io::IO, bt)
 end
 
 function write_imm(io::IO, kind::Symbol, @nospecialize(x))
-    if kind === :u32
+    if kind === :u32 || kind === :align || kind === :offset || kind === :memidx
         leb_u(io, x)
     elseif kind === :i32
         leb_s(io, const_bits(Int32, x))
@@ -197,6 +197,12 @@ function write_locals(io::IO, locals::Vector{ValType})
     end
 end
 
+function write_limits(io::IO, mem::LinearMemory)
+    write(io, mem.max === nothing ? 0x00 : 0x01)
+    leb_u(io, mem.min)
+    mem.max === nothing || leb_u(io, mem.max)
+end
+
 """
     to_bytes(m::WModule; verify=true) -> Vector{UInt8}
 
@@ -228,6 +234,10 @@ function to_bytes(m::WModule; verify::Bool=true)
     write_section(io, 3) do s
         write_vec((s, f) -> leb_u(s, f.type.idx), s, defined)
     end
+    m.memory === nothing || write_section(io, 5) do s
+        leb_u(s, 1)
+        write_limits(s, m.memory)
+    end
     isempty(m.tags) || write_section(io, 13) do s
         write_vec(s, m.tags) do s, t
             write(s, 0x00)
@@ -250,6 +260,8 @@ function to_bytes(m::WModule; verify::Bool=true)
                 write(s, 0x03); leb_u(s, item.idx)
             elseif item isa Tag
                 write(s, 0x04); leb_u(s, item.idx)
+            elseif item isa LinearMemory
+                write(s, 0x02); leb_u(s, 0)
             else
                 error("cannot export $item")
             end
