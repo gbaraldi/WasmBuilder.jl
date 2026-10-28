@@ -58,6 +58,8 @@ function show_imm(io::IO, kind::Symbol, @nospecialize(x))
         show_types(io, x)
     elseif kind === :ref || kind === :refnull
         show_valtype(io, RefType(x, kind === :refnull))
+    elseif kind === :memidx
+        print(io, x)
     elseif kind === :labels
         join(io, x, " ")
     elseif kind === :catches
@@ -89,6 +91,12 @@ function show_inst(io::IO, i::Inst)
         show_valtype(io, RefType(h1, flags & 1 != 0))
         print(io, " ")
         show_valtype(io, RefType(h2, flags & 2 != 0))
+    elseif haskey(MEMORY_ACCESSES, i.op)
+        # memarg: the offset, then the alignment, each written when not the default
+        align, offset = i.imm
+        print(io, info.text)
+        offset == 0 || print(io, " offset=", offset)
+        align == MEMORY_ACCESSES[i.op] || print(io, " align=", 1 << align)
     else
         print(io, info.text)
         foreach((k, x) -> show_imm(io, k, x), info.imms, i.imm)
@@ -121,6 +129,8 @@ function print_wat(io::IO, m::WModule)
         println(io, "))")
     end
     println(io, "  )")
+    mem = m.memory
+    mem === nothing || println(io, "  (memory ", mem.min, mem.max === nothing ? "" : " $(mem.max)", ")")
     for g in m.globals
         print(io, "  (global \$", g.name, " ", g.mutable ? "(mut " : "")
         show_valtype(io, g.type)
@@ -151,8 +161,8 @@ function print_wat(io::IO, m::WModule)
         println(io, "  )")
     end
     for (name, item) in m.exports
-        println(io, "  (export \"", name, "\" ", item isa Func ? "(func \$" : item isa Global ? "(global \$" : "(tag ",
-                item isa Tag ? item.idx : item.name, "))")
+        println(io, "  (export \"", name, "\" ", item isa Func ? "(func \$" : item isa Global ? "(global \$" :
+                item isa LinearMemory ? "(memory " : "(tag ", item isa Tag ? item.idx : item isa LinearMemory ? 0 : item.name, "))")
     end
     m.start === nothing || println(io, "  (start \$", m.start.name, ")")
     println(io, ")")

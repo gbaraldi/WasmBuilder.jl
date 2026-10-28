@@ -9,9 +9,9 @@ module WasmBuilder
 
 export NumType, I32, I64, F32, F64, V128, PackedType, I8, I16, TypeRef, RefType, ValType,
        FieldType, FuncType, StructType, ArrayType, SubType, HeapType,
-       Inst, Func, Global, Tag, WModule,
+       Inst, Func, Global, Tag, LinearMemory, WModule,
        add_type!, typedef, functype!, add_func!, add_import!, add_global!, add_tag!,
-       add_data!, add_export!, add_local!, local_type, to_bytes,
+       add_memory!, add_data!, add_export!, add_local!, local_type, to_bytes,
        Builder, emit!, block!, loop!, if!, else!, end!, finish!, br!, br_if!, br_table!,
        br_on_null!, br_on_non_null!, br_on_cast!, br_on_cast_fail!, return!, unreachable!,
        throw!, throw_ref!, try_table!, call!, call_ref!, return_call!, return_call_ref!,

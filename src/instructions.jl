@@ -12,6 +12,9 @@ end
 
 const INSTRUCTIONS = Dict{Symbol,OpInfo}()
 
+"The natural alignment (log2 of bytes) of each load and store of the linear memory."
+const MEMORY_ACCESSES = Dict{Symbol,Int}()
+
 # the first components of the names written with a `.` in the text format
 const TEXT_NAMESPACES = Set(["i32", "i64", "f32", "f64", "v128", "local", "global", "ref",
                              "struct", "array", "i31", "any", "extern", "table", "memory",
@@ -79,6 +82,25 @@ let
     definst!(:local_get, 0x20, (:u32,)); definst!(:local_set, 0x21, (:u32,))
     definst!(:local_tee, 0x22, (:u32,))
     definst!(:global_get, 0x23, (:global,)); definst!(:global_set, 0x24, (:global,))
+
+    # linear memory: loads and stores take a memarg, two immediates (the log2 of the
+    # alignment, at most the natural one, and a constant offset added to the address)
+    for (i, (op, t, a)) in enumerate(((:i32_load, I32, 2), (:i64_load, I64, 3), (:f32_load, F32, 2),
+                                      (:f64_load, F64, 3), (:i32_load8_s, I32, 0), (:i32_load8_u, I32, 0),
+                                      (:i32_load16_s, I32, 1), (:i32_load16_u, I32, 1), (:i64_load8_s, I64, 0),
+                                      (:i64_load8_u, I64, 0), (:i64_load16_s, I64, 1), (:i64_load16_u, I64, 1),
+                                      (:i64_load32_s, I64, 2), (:i64_load32_u, I64, 2)))
+        definst!(op, 0x28 + i - 1, (:align, :offset); sig=fixedsig((I32,), (t,)))
+        MEMORY_ACCESSES[op] = a
+    end
+    for (i, (op, t, a)) in enumerate(((:i32_store, I32, 2), (:i64_store, I64, 3), (:f32_store, F32, 2),
+                                      (:f64_store, F64, 3), (:i32_store8, I32, 0), (:i32_store16, I32, 1),
+                                      (:i64_store8, I64, 0), (:i64_store16, I64, 1), (:i64_store32, I64, 2)))
+        definst!(op, 0x36 + i - 1, (:align, :offset); sig=fixedsig((I32, t), ()))
+        MEMORY_ACCESSES[op] = a
+    end
+    definst!(:memory_size, 0x3f, (:memidx,); sig=fixedsig((), (I32,)))
+    definst!(:memory_grow, 0x40, (:memidx,); sig=fixedsig((I32,), (I32,)))
 
     # numeric
     definst!(:i32_const, 0x41, (:i32,); sig=fixedsig((), (I32,)))
