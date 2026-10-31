@@ -134,7 +134,7 @@ const exnref = RefType(:exn)
     @test checkvalid(bytes)
     @test node_run(bytes, "console.log(e.u8(), e.big(), e.u32(), e.neg(), e.u64())") ==
           "255 -2147483648 -1 -1 -1n"
-    enc(x) = (io = IOBuffer(); W.write_inst(io, Inst(:i32_const, x)); take!(io))
+    enc(x) = (io = IOBuffer(); W.write_inst(io, W.TypeOrder(m), Inst(:i32_const, x)); take!(io))
     @test enc(UInt8(255)) == [0x41, 0xff, 0x01]
     @test enc(Int64(2147483648)) == [0x41, 0x80, 0x80, 0x80, 0x80, 0x78]
     @test fails(b -> emit!(b, :i32_const, Int64(1) << 32), m)
@@ -538,10 +538,13 @@ end
     build(b -> return_call!(b, f), m, "t")
     @test checkvalid(to_bytes(m))
     wat = sprint(print_wat, m)
+    # (type indices as in the binary)
+    ord = W.TypeOrder(m)
+    si, fi = W.type_index(ord, s), W.type_index(ord, f.type)
     for name in ["br_if 0", "br_table 0 0 0", "try_table (catch \$tag0 1) (catch_all_ref 0)",
-                 "block (result (ref null exn))", "i32.add", "local.get 0", "struct.new_default 0",
-                 "ref.as_non_null", "any.convert_extern", "br_on_null 0", "ref.test (ref null 0)",
-                 "call_ref 1", "select (result i32)", "throw_ref", "return_call \$f", "ref.func \$f"]
+                 "block (result (ref null exn))", "i32.add", "local.get 0", "struct.new_default $si",
+                 "ref.as_non_null", "any.convert_extern", "br_on_null 0", "ref.test (ref null $si)",
+                 "call_ref $fi", "select (result i32)", "throw_ref", "return_call \$f", "ref.func \$f"]
         @test occursin(name, wat)
     end
     for name in ["br.", "try.", "select.", "call.", "return.", "throw.", "test_null"]
@@ -580,7 +583,7 @@ end
     # (the i32 at 4 holds bytes 4..7 of memory: 0)
     @test node_run(bytes, "console.log(e.rw(40n), e.grow(), e.memory.buffer.byteLength, new Uint8Array(e.memory.buffer)[24])") ==
           "295n 2 131072 40"
-    enc(i) = (io = IOBuffer(); W.write_inst(io, i); take!(io))
+    enc(i) = (io = IOBuffer(); W.write_inst(io, W.TypeOrder(m), i); take!(io))
     @test enc(Inst(:i64_store, 3, 8)) == [0x37, 0x03, 0x08]
     @test enc(Inst(:memory_grow, 0)) == [0x40, 0x00]
     wat = sprint(print_wat, m)
@@ -602,4 +605,59 @@ end
     m2.memory = W.LinearMemory(1, nothing)
     add_export!(m2, "other", W.LinearMemory(1, nothing))
     @test_throws WasmValidationError verify(m2)
+end
+
+@testset "function types of imports match other modules' (recursion groups)" begin
+    # an engine checks an imported function's type against the provider's: under
+    # iso-recursive type equality they are equal only if both are recursion groups of the same
+    # shape, so a structural function type must not share a group with the module's other types
+    x = WModule()
+    f = add_func!(x, "f", ValType[I32], ValType[I32])
+    b = Builder(x, f)
+    emit!(b, :local_get, 0); emit!(b, :i32_const, 1); emit!(b, :i32_add)
+    finish!(b)
+    add_export!(x, "f", f)
+
+    y = WModule()
+    st = add_type!(y, StructType([FieldType(I32, true)]))
+    g = add_import!(y, "x", "f", ValType[I32], ValType[I32])
+    h = add_func!(y, "h", ValType[I32], ValType[I32])
+    b = Builder(y, h)
+    emit!(b, :local_get, 0); emit!(b, :struct_new, st); emit!(b, :struct_get, st, 0); call!(b, g)
+    finish!(b)
+    add_export!(y, "h", h)
+    # nominal function types (`add_type!`) stay in the recursion group, distinct
+    n1 = add_type!(y, FuncType(ValType[I32], ValType[I32]))
+    n2 = add_type!(y, FuncType(ValType[I32], ValType[I32]))
+    t = add_func!(y, "t", ValType[], ValType[I32])
+    b = Builder(y, t)
+    emit!(b, :ref_func, h); emit!(b, :ref_test, n1)
+    emit!(b, :ref_func, h); emit!(b, :ref_test, h.type); emit!(b, :i32_const, 1); emit!(b, :i32_shl); emit!(b, :i32_or)
+    finish!(b)
+    add_export!(y, "t", t)
+
+    ord = W.TypeOrder(y)
+    @test h.type.idx in ord.singles && g.type == h.type
+    @test st.idx in ord.group && n1.idx in ord.group && n2.idx in ord.group
+    @test sort([ord.singles; ord.group]) == 0:length(y.types)-1
+    @test ord.index[h.type.idx+1] == 0 && ord.index[st.idx+1] == length(ord.singles)
+
+    xb, yb = to_bytes(x), to_bytes(y)
+    @test checkvalid(xb) && checkvalid(yb)
+    dir = mktempdir()
+    write(joinpath(dir, "x.wasm"), xb); write(joinpath(dir, "y.wasm"), yb)
+    write(joinpath(dir, "run.js"), """
+    const fs = require('fs');
+    (async () => {
+      const x = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "x.wasm"))'), {});
+      const y = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "y.wasm"))'), { x: { f: x.instance.exports.f } });
+      console.log(y.instance.exports.h(41), y.instance.exports.t());
+    })().catch((e) => console.log(e.constructor.name));
+    """)
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "run.js"))`, String)) == "42 2"
+    # the text shows the binary's type indices and groups
+    wat = sprint(print_wat, y)
+    @test startswith(wat, "(module\n  (type 0 (sub final (func (param i32) (result i32))))\n")
+    @test occursin("  (rec\n    (type $(length(ord.singles)) (sub final (struct", wat)
+    @test occursin("(func \$h (type 0)", wat)
 end

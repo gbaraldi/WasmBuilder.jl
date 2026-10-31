@@ -21,16 +21,26 @@ Binaryen's `wasm-opt` for optimization (a code generator's choice).
 | `Inst` | an instruction: name (text format with `_`) and immediates (items, not indices) |
 | `Builder` | appends validated instructions to a function body |
 
-### Types: one recursion group
+### Types: one recursion group, and structural function types
 
-All type definitions of a module are in a single recursion group. Under the iso-recursive
-type equivalence of the GC proposal, two definitions in the same group at different
-positions are distinct types even if structurally equal. That makes the module's types
-nominal, which a code generator needs to distinguish source types by `ref.test`/`ref.cast`
-(two Julia structs with the same field types must not be the same Wasm type). dart2wasm
-does the same. The cost is that types cannot be deduplicated against other modules, which
-does not matter for a whole-program compiler. Function types are deduplicated within the
-module (`functype!`).
+The type definitions of a module are in a single recursion group, but for the function
+types described below. Under the iso-recursive type equivalence of the GC proposal, two
+definitions in the same group at different positions are distinct types even if
+structurally equal. That makes the module's types nominal, which a code generator needs to
+distinguish source types by `ref.test`/`ref.cast` (two Julia structs with the same field
+types must not be the same Wasm type). dart2wasm does the same. The cost is that those types
+cannot be deduplicated against other modules, which does not matter for a whole-program
+compiler.
+
+Function types made by `functype!` are structural: one per signature in the module. Those
+that reference no defined type (numbers and abstract references only) are written first,
+each a recursion group of its own (`TypeOrder`), so that they are equal to the same
+signature in any other module. An engine checks an import's type against the type of the
+function it is given: a host function's type, or another module's export's, is such a
+group of its own, and a function type inside the module's large group would never match it.
+Function types added with `add_type!` stay in the large group, nominal. `TypeRef`s are
+indices in definition order; `TypeOrder` maps them to the binary's indices when the module
+is written or printed.
 
 A subtype's supertype must have a smaller index; types are numbered in creation order, so
 a code generator creates a supertype before its subtypes.
