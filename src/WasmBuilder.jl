@@ -20,6 +20,7 @@ export NumType, I32, I64, F32, F64, V128, PackedType, I8, I16, TypeRef, RefType,
 
 include("types.jl")
 include("module.jl")
+include("typeorder.jl")
 include("subtyping.jl")
 include("instructions.jl")
 include("builder.jl")

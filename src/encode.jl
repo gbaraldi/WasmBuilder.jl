@@ -48,45 +48,45 @@ function write_vec(f, io::IO, xs)
     foreach(x -> f(io, x), xs)
 end
 
-write_heap(io::IO, h::Symbol) = write(io, ABSTRACT_HEAPTYPES[h])
-write_heap(io::IO, h::TypeRef) = leb_s(io, h.idx)   # s33
+write_heap(io::IO, ord::TypeOrder, h::Symbol) = write(io, ABSTRACT_HEAPTYPES[h])
+write_heap(io::IO, ord::TypeOrder, h::TypeRef) = leb_s(io, type_index(ord, h))   # s33
 
-write_valtype(io::IO, t::NumType) = write(io, UInt8(t))
-function write_valtype(io::IO, t::RefType)
+write_valtype(io::IO, ord::TypeOrder, t::NumType) = write(io, UInt8(t))
+function write_valtype(io::IO, ord::TypeOrder, t::RefType)
     write(io, t.nullable ? 0x63 : 0x64)
-    write_heap(io, t.heap)
+    write_heap(io, ord, t.heap)
 end
-write_storage(io::IO, t::PackedType) = write(io, UInt8(t))
-write_storage(io::IO, t::ValType) = write_valtype(io, t)
+write_storage(io::IO, ord::TypeOrder, t::PackedType) = write(io, UInt8(t))
+write_storage(io::IO, ord::TypeOrder, t::ValType) = write_valtype(io, ord, t)
 
-function write_field(io::IO, f::FieldType)
-    write_storage(io, f.storage)
+function write_field(io::IO, ord::TypeOrder, f::FieldType)
+    write_storage(io, ord, f.storage)
     write(io, f.mutable ? 0x01 : 0x00)
 end
 
-function write_comp(io::IO, t::FuncType)
+function write_comp(io::IO, ord::TypeOrder, t::FuncType)
     write(io, 0x60)
-    write_vec(write_valtype, io, t.params)
-    write_vec(write_valtype, io, t.results)
+    write_vec((io, x) -> write_valtype(io, ord, x), io, t.params)
+    write_vec((io, x) -> write_valtype(io, ord, x), io, t.results)
 end
-function write_comp(io::IO, t::StructType)
+function write_comp(io::IO, ord::TypeOrder, t::StructType)
     write(io, 0x5f)
-    write_vec(write_field, io, t.fields)
+    write_vec((io, f) -> write_field(io, ord, f), io, t.fields)
 end
-function write_comp(io::IO, t::ArrayType)
+function write_comp(io::IO, ord::TypeOrder, t::ArrayType)
     write(io, 0x5e)
-    write_field(io, t.elem)
+    write_field(io, ord, t.elem)
 end
 
-function write_subtype(io::IO, t::SubType)
+function write_subtype(io::IO, ord::TypeOrder, t::SubType)
     write(io, t.final ? 0x4f : 0x50)
     if t.super === nothing
         leb_u(io, 0)
     else
         leb_u(io, 1)
-        leb_u(io, t.super.idx)
+        leb_u(io, type_index(ord, t.super))
     end
-    write_comp(io, t.comp)
+    write_comp(io, ord, t.comp)
 end
 
 ## instructions
@@ -98,19 +98,19 @@ function const_bits(::Type{T}, x::Integer) where {T<:Union{Int32,Int64}}
     return x < 0 ? T(x) : reinterpret(T, U(x))
 end
 
-function write_blocktype(io::IO, bt)
+function write_blocktype(io::IO, ord::TypeOrder, bt)
     if bt === nothing || bt === :empty
         write(io, 0x40)
     elseif bt isa ValType
-        write_valtype(io, bt)
+        write_valtype(io, ord, bt)
     elseif bt isa TypeRef
-        leb_s(io, bt.idx)
+        leb_s(io, type_index(ord, bt))
     else
         error("invalid block type $bt")
     end
 end
 
-function write_imm(io::IO, kind::Symbol, @nospecialize(x))
+function write_imm(io::IO, ord::TypeOrder, kind::Symbol, @nospecialize(x))
     if kind === :u32 || kind === :align || kind === :offset || kind === :memidx
         leb_u(io, x)
     elseif kind === :i32
@@ -122,11 +122,11 @@ function write_imm(io::IO, kind::Symbol, @nospecialize(x))
     elseif kind === :f64
         write(io, htol(reinterpret(UInt64, Float64(x))))
     elseif kind === :bt
-        write_blocktype(io, x)
+        write_blocktype(io, ord, x)
     elseif kind === :type
-        leb_u(io, (x::TypeRef).idx)
+        leb_u(io, type_index(ord, x::TypeRef))
     elseif kind === :heap || kind === :ref || kind === :refnull
-        write_heap(io, x)
+        write_heap(io, ord, x)
     elseif kind === :func
         leb_u(io, (x::Func).idx)
     elseif kind === :global
@@ -136,7 +136,7 @@ function write_imm(io::IO, kind::Symbol, @nospecialize(x))
     elseif kind === :labels
         write_vec(leb_u, io, x)
     elseif kind === :valtypes
-        write_vec(write_valtype, io, x)
+        write_vec((io, t) -> write_valtype(io, ord, t), io, x)
     elseif kind === :castflags
         write(io, UInt8(x))
     elseif kind === :catches
@@ -152,7 +152,7 @@ function write_imm(io::IO, kind::Symbol, @nospecialize(x))
     end
 end
 
-function write_inst(io::IO, inst::Inst)
+function write_inst(io::IO, ord::TypeOrder, inst::Inst)
     info = get(INSTRUCTIONS, inst.op, nothing)
     info === nothing && error("unknown instruction $(inst.op)")
     kinds = info.imms
@@ -160,12 +160,12 @@ function write_inst(io::IO, inst::Inst)
     length(kinds) == length(inst.imm) ||
         error("instruction $(inst.op) takes $(length(kinds)) immediates, got $(length(inst.imm))")
     for (k, x) in zip(kinds, inst.imm)
-        write_imm(io, k, x)
+        write_imm(io, ord, k, x)
     end
 end
 
-function write_expr(io::IO, insts::Vector{Inst})
-    foreach(i -> write_inst(io, i), insts)
+function write_expr(io::IO, ord::TypeOrder, insts::Vector{Inst})
+    foreach(i -> write_inst(io, ord, i), insts)
     write(io, 0x0b)
 end
 
@@ -180,7 +180,7 @@ function write_section(f, io::IO, id::Integer)
     write(io, bytes)
 end
 
-function write_locals(io::IO, locals::Vector{ValType})
+function write_locals(io::IO, ord::TypeOrder, locals::Vector{ValType})
     # runs of equal types
     runs = Tuple{Int,ValType}[]
     for t in locals
@@ -193,7 +193,7 @@ function write_locals(io::IO, locals::Vector{ValType})
     leb_u(io, length(runs))
     for (n, t) in runs
         leb_u(io, n)
-        write_valtype(io, t)
+        write_valtype(io, ord, t)
     end
 end
 
@@ -212,27 +212,32 @@ false.
 function to_bytes(m::WModule; verify::Bool=true)
     verify && WasmBuilder.verify(m)
     assign_indices!(m)
+    ord = TypeOrder(m)
     io = IOBuffer()
     write(io, UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
     imports = filter(f -> f.imported !== nothing, m.funcs)
     defined = filter(f -> f.imported === nothing, m.funcs)
 
-    # types: one recursion group
+    # types: the structural function types, each a recursion group of its own, then one
+    # recursion group of the others (`TypeOrder`)
     write_section(io, 1) do s
-        leb_u(s, 1)
-        write(s, 0x4e)
-        write_vec(write_subtype, s, m.types)
+        leb_u(s, length(ord.singles) + !isempty(ord.group))
+        foreach(i -> write_subtype(s, ord, m.types[i+1]), ord.singles)
+        if !isempty(ord.group)
+            write(s, 0x4e)
+            write_vec((s, i) -> write_subtype(s, ord, m.types[i+1]), s, ord.group)
+        end
     end
     isempty(imports) || write_section(io, 2) do s
         write_vec(s, imports) do s, f
             write_name(s, f.imported[1])
             write_name(s, f.imported[2])
             write(s, 0x00)
-            leb_u(s, f.type.idx)
+            leb_u(s, type_index(ord, f.type))
         end
     end
     write_section(io, 3) do s
-        write_vec((s, f) -> leb_u(s, f.type.idx), s, defined)
+        write_vec((s, f) -> leb_u(s, type_index(ord, f.type)), s, defined)
     end
     m.memory === nothing || write_section(io, 5) do s
         leb_u(s, 1)
@@ -241,14 +246,14 @@ function to_bytes(m::WModule; verify::Bool=true)
     isempty(m.tags) || write_section(io, 13) do s
         write_vec(s, m.tags) do s, t
             write(s, 0x00)
-            leb_u(s, t.type.idx)
+            leb_u(s, type_index(ord, t.type))
         end
     end
     isempty(m.globals) || write_section(io, 6) do s
         write_vec(s, m.globals) do s, g
-            write_valtype(s, g.type)
+            write_valtype(s, ord, g.type)
             write(s, g.mutable ? 0x01 : 0x00)
-            write_expr(s, g.init)
+            write_expr(s, ord, g.init)
         end
     end
     isempty(m.exports) || write_section(io, 7) do s
@@ -283,8 +288,8 @@ function to_bytes(m::WModule; verify::Bool=true)
     write_section(io, 10) do s
         write_vec(s, defined) do s, f
             body = IOBuffer()
-            write_locals(body, f.locals)
-            write_expr(body, f.body)
+            write_locals(body, ord, f.locals)
+            write_expr(body, ord, f.body)
             bytes = take!(body)
             leb_u(s, length(bytes))
             write(s, bytes)
