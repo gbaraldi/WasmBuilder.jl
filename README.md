@@ -57,8 +57,10 @@ emit!(b, :i32_eqz)
 
 ## Design
 
-- **Nominal types.** All type definitions are in one recursion group, so two struct types
-  with the same fields are distinct types, as a source language's types need to be.
+- **Nominal types.** Type definitions are in one recursion group, so two struct types
+  with the same fields are distinct types, as a source language's types need to be. Function
+  types of numbers and abstract references made by `functype!` are recursion groups of their
+  own, so that imports match the functions a host or another module provides.
 - **Items, not indices.** Instructions refer to functions, globals and tags as objects.
   Indices are assigned when the module is written, so imports can be added at any point of
   code generation.
