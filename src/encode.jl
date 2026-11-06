@@ -225,7 +225,9 @@ function to_bytes(m::WModule; verify::Bool=true)
         foreach(i -> write_subtype(s, ord, m.types[i+1]), ord.singles)
         if !isempty(ord.group)
             write(s, 0x4e)
-            write_vec((s, i) -> write_subtype(s, ord, m.types[i+1]), s, ord.group)
+            leb_u(s, length(ord.group) + ord.filler)
+            foreach(i -> write_subtype(s, ord, m.types[i+1]), ord.group)
+            ord.filler && write_subtype(s, ord, FILLER_TYPE)
         end
     end
     isempty(imports) || write_section(io, 2) do s

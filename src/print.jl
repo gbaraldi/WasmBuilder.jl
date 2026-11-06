@@ -122,17 +122,18 @@ function print_wat(io::IO, m::WModule)
     assign_indices!(m)
     ord = TypeOrder(m)
     println(io, "(module")
-    function show_type(i, indent)
-        t = m.types[i+1]
-        print(io, indent, "(type ", type_index(ord, TypeRef(i)), " (sub ", t.final ? "final " : "")
+    function show_subtype(k, t, indent)
+        print(io, indent, "(type ", k, " (sub ", t.final ? "final " : "")
         t.super === nothing || print(io, type_index(ord, t.super), " ")
         show_comp(io, ord, t.comp)
         println(io, "))")
     end
+    show_type(i, indent) = show_subtype(type_index(ord, TypeRef(i)), m.types[i+1], indent)
     foreach(i -> show_type(i, "  "), ord.singles)
     if !isempty(ord.group)
         println(io, "  (rec")
         foreach(i -> show_type(i, "    "), ord.group)
+        ord.filler && show_subtype(length(m.types), FILLER_TYPE, "    ")
         println(io, "  )")
     end
     mem = m.memory

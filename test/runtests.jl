@@ -660,4 +660,35 @@ end
     @test startswith(wat, "(module\n  (type 0 (sub final (func (param i32) (result i32))))\n")
     @test occursin("  (rec\n    (type $(length(ord.singles)) (sub final (struct", wat)
     @test occursin("(func \$h (type 0)", wat)
+
+    # a nominal function type alone in the recursion group, with the signature of a structural
+    # one: a recursion group of one type equals any other of the same definition, so the group
+    # ends with an unused type, and the structural one still matches the provider's
+    z = WModule()
+    n = add_type!(z, FuncType(ValType[I32], ValType[I32]))
+    k = add_import!(z, "x", "f", ValType[I32], ValType[I32])
+    u = add_func!(z, "u", ValType[], ValType[I32])
+    b = Builder(z, u)
+    emit!(b, :i32_const, 41); call!(b, k); emit!(b, :i32_const, 10); emit!(b, :i32_mul)
+    emit!(b, :ref_func, k); emit!(b, :ref_test, n); emit!(b, :i32_add)
+    finish!(b)
+    add_export!(z, "u", u)
+    ord = W.TypeOrder(z)
+    @test k.type.idx in ord.singles && ord.group == [n.idx] && ord.filler
+    @test !W.TypeOrder(y).filler
+    zb = to_bytes(z)
+    @test checkvalid(zb)
+    write(joinpath(dir, "z.wasm"), zb)
+    write(joinpath(dir, "runz.js"), """
+    const fs = require('fs');
+    (async () => {
+      const x = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "x.wasm"))'), {});
+      const z = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "z.wasm"))'), { x: { f: x.instance.exports.f } });
+      console.log(z.instance.exports.u());
+    })().catch((e) => console.log(e.constructor.name));
+    """)
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "runz.js"))`, String)) == "420"
+    wat = sprint(print_wat, z)
+    i = length(ord.singles)
+    @test occursin("  (rec\n    (type $i (sub final (func (param i32) (result i32))))\n    (type $(i+1) (sub final (struct)))\n  )", wat)
 end
