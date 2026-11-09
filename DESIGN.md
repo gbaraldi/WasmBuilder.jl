@@ -82,7 +82,8 @@ definitions (supertypes defined earlier, not final, and matching), global initia
 (constant expressions of the global's type, reading earlier immutable globals), tags,
 unique export names and the type of the start function. `to_bytes` calls it.
 
-Not covered yet: tables and `call_indirect`, linear memory, SIMD, element segments beyond
+Not covered yet: tables and `call_indirect`, SIMD beyond splats, lanes, shuffles and the
+arithmetic of f32x4 and f64x2 (with relaxed SIMD's multiply-add), element segments beyond
 the declarative one that `ref.func` needs (`declare!` adds functions to it), imported
 globals.
 

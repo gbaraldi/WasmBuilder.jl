@@ -16,9 +16,9 @@ const INSTRUCTIONS = Dict{Symbol,OpInfo}()
 const MEMORY_ACCESSES = Dict{Symbol,Int}()
 
 # the first components of the names written with a `.` in the text format
-const TEXT_NAMESPACES = Set(["i32", "i64", "f32", "f64", "v128", "local", "global", "ref",
-                             "struct", "array", "i31", "any", "extern", "table", "memory",
-                             "elem", "data"])
+const TEXT_NAMESPACES = Set(["i32", "i64", "f32", "f64", "v128", "i8x16", "i16x8", "i32x4",
+                             "i64x2", "f32x4", "f64x2", "local", "global", "ref", "struct",
+                             "array", "i31", "any", "extern", "table", "memory", "elem", "data"])
 
 "The name of the instruction `op` in the text format (`i32_add` is `i32.add`)."
 function text_name(op::Symbol)
@@ -60,6 +60,15 @@ function definst!(op::Symbol, code, imms::Tuple=(); sig=numeric_sig(op), text=te
 end
 
 fixedsig(params, results) = (ValType[params...], ValType[results...])
+
+# the opcode bytes of a SIMD instruction: the prefix 0xfd, then the opcode as a LEB128 u32
+function simd_code(op::Integer)
+    code = UInt8[0xfd]
+    while true
+        b = UInt8(op & 0x7f); op >>= 7
+        op == 0 ? (push!(code, b); return code) : push!(code, b | 0x80)
+    end
+end
 
 let
     # control (validated by their own functions in the builder)
@@ -170,4 +179,25 @@ let
     definst!(:ref_i31, (0xfb, 0x1c); sig=fixedsig((I32,), (RefType(:i31, false),)))
     definst!(:i31_get_s, (0xfb, 0x1d); sig=fixedsig((RefType(:i31),), (I32,)))
     definst!(:i31_get_u, (0xfb, 0x1e); sig=fixedsig((RefType(:i31),), (I32,)))
+
+    # SIMD (v128): splats, lanes (a lane index is one byte), shuffles, and the arithmetic of
+    # f32x4 and f64x2, with relaxed SIMD's multiply-add
+    V = V128
+    definst!(:i8x16_shuffle, simd_code(0x0d), ntuple(_ -> :lane, 16); sig=fixedsig((V, V), (V,)))
+    definst!(:f32x4_splat, simd_code(0x13); sig=fixedsig((F32,), (V,)))
+    definst!(:f64x2_splat, simd_code(0x14); sig=fixedsig((F64,), (V,)))
+    definst!(:f32x4_extract_lane, simd_code(0x1f), (:lane,); sig=fixedsig((V,), (F32,)))
+    definst!(:f32x4_replace_lane, simd_code(0x20), (:lane,); sig=fixedsig((V, F32), (V,)))
+    definst!(:f64x2_extract_lane, simd_code(0x21), (:lane,); sig=fixedsig((V,), (F64,)))
+    definst!(:f64x2_replace_lane, simd_code(0x22), (:lane,); sig=fixedsig((V, F64), (V,)))
+    for (shape, base) in ((:f32x4, 0xe0), (:f64x2, 0xec))
+        for (k, op) in ((0, :abs), (1, :neg), (3, :sqrt))
+            definst!(Symbol(shape, "_", op), simd_code(base + k); sig=fixedsig((V,), (V,)))
+        end
+        for (k, op) in ((4, :add), (5, :sub), (6, :mul), (7, :div))
+            definst!(Symbol(shape, "_", op), simd_code(base + k); sig=fixedsig((V, V), (V,)))
+        end
+    end
+    definst!(:f32x4_relaxed_madd, simd_code(0x105); sig=fixedsig((V, V, V), (V,)))
+    definst!(:f64x2_relaxed_madd, simd_code(0x107); sig=fixedsig((V, V, V), (V,)))
 end

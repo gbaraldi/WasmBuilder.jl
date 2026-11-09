@@ -137,7 +137,7 @@ function write_imm(io::IO, ord::TypeOrder, kind::Symbol, @nospecialize(x))
         write_vec(leb_u, io, x)
     elseif kind === :valtypes
         write_vec((io, t) -> write_valtype(io, ord, t), io, x)
-    elseif kind === :castflags
+    elseif kind === :castflags || kind === :lane
         write(io, UInt8(x))
     elseif kind === :catches
         # (kind, tag or nothing, label): 0 catch, 1 catch_ref, 2 catch_all, 3 catch_all_ref
