@@ -1,6 +1,6 @@
 name = "WasmBuilder"
 uuid = "c3e9a8f2-6b1d-4f7a-8e25-1a9d3b7c4e60"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Gabriel Baraldi <gabriel.baraldi@juliahub.com>"]
 
 [deps]

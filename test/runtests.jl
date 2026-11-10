@@ -607,6 +607,63 @@ end
     @test_throws WasmValidationError verify(m2)
 end
 
+@testset "SIMD" begin
+    m = WModule()
+    # (a, b) * (a, a) + (b, b) = (a^2 + b, ab + b), then (its lane 1, lane 0 of (a, a)) as two digits
+    build(m, "f64x2", ValType[F64, F64], ValType[F64]) do b
+        v = add_local!(b.func, V128)
+        emit!(b, :local_get, 0); emit!(b, :f64x2_splat); emit!(b, :local_get, 1); emit!(b, :f64x2_replace_lane, 1)
+        emit!(b, :local_get, 0); emit!(b, :f64x2_splat); emit!(b, :f64x2_mul)
+        emit!(b, :local_get, 1); emit!(b, :f64x2_splat); emit!(b, :f64x2_add)
+        emit!(b, :local_get, 0); emit!(b, :f64x2_splat)
+        emit!(b, :i8x16_shuffle, 8:15..., 16:23...)
+        emit!(b, :local_tee, v); emit!(b, :f64x2_extract_lane, 0); emit!(b, :f64_const, 10.0); emit!(b, :f64_mul)
+        emit!(b, :local_get, v); emit!(b, :f64x2_extract_lane, 1); emit!(b, :f64_add)
+    end
+    # (x, x, x, 4): squared, negated, abs, sqrt, / 1, - 0, then * 2 + 3 (relaxed, exact
+    # here), its lanes summed
+    build(m, "f32x4", ValType[F32], ValType[F32]) do b
+        v = add_local!(b.func, V128)
+        emit!(b, :local_get, 0); emit!(b, :f32x4_splat); emit!(b, :f32_const, 4.0); emit!(b, :f32x4_replace_lane, 3)
+        emit!(b, :local_tee, v); emit!(b, :local_get, v); emit!(b, :f32x4_mul); emit!(b, :f32x4_neg)
+        emit!(b, :f32x4_abs); emit!(b, :f32x4_sqrt)
+        emit!(b, :f32_const, 1.0); emit!(b, :f32x4_splat); emit!(b, :f32x4_div)
+        emit!(b, :f32_const, 0.0); emit!(b, :f32x4_splat); emit!(b, :f32x4_sub)
+        emit!(b, :f32_const, 2.0); emit!(b, :f32x4_splat); emit!(b, :f32_const, 3.0); emit!(b, :f32x4_splat)
+        emit!(b, :f32x4_relaxed_madd)
+        emit!(b, :local_tee, v); emit!(b, :f32x4_extract_lane, 0)
+        for k in 1:3
+            emit!(b, :local_get, v); emit!(b, :f32x4_extract_lane, k); emit!(b, :f32_add)
+        end
+    end
+    build(m, "relaxed", ValType[F64], ValType[F64]) do b
+        emit!(b, :local_get, 0); emit!(b, :f64x2_splat); emit!(b, :local_get, 0); emit!(b, :f64x2_splat)
+        emit!(b, :f64_const, 1.0); emit!(b, :f64x2_splat); emit!(b, :f64x2_relaxed_madd)
+        emit!(b, :f64x2_extract_lane, 1)
+    end
+    @test fails(b -> (emit!(b, :f64_const, 1.0); emit!(b, :f64x2_splat); emit!(b, :f64x2_extract_lane, 256); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :f64_const, 1.0); emit!(b, :f64x2_splat); emit!(b, :f64x2_extract_lane, 2); emit!(b, :drop)), m)
+    @test !fails(b -> (emit!(b, :f32_const, 1.0); emit!(b, :f32x4_splat); emit!(b, :f32x4_extract_lane, 3); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :f32_const, 1.0); emit!(b, :f32x4_splat); emit!(b, :f32_const, 2.0); emit!(b, :f32x4_replace_lane, 4); emit!(b, :drop)), m)
+    two(b) = (emit!(b, :f64_const, 1.0); emit!(b, :f64x2_splat); emit!(b, :f64_const, 2.0); emit!(b, :f64x2_splat))
+    @test !fails(b -> (two(b); emit!(b, :i8x16_shuffle, 0:14..., 31); emit!(b, :drop)), m)
+    @test fails(b -> (two(b); emit!(b, :i8x16_shuffle, 0:14..., 32); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :f64_const, 1.0); emit!(b, :f64x2_extract_lane, 0); emit!(b, :drop)), m)
+    bytes = to_bytes(m)
+    @test checkvalid(bytes)
+    # f64x2(3, 2): (11, 8) and (3, 3), shuffled to (8, 3): 83; f32x4(3): 9 + 9 + 9 + 11
+    @test node_run(bytes, "console.log(e.f64x2(3, 2), e.f32x4(3), e.relaxed(3))") == "83 38 10"
+    enc(i) = (io = IOBuffer(); W.write_inst(io, W.TypeOrder(m), i); take!(io))
+    @test enc(Inst(:f64x2_add)) == [0xfd, 0xf0, 0x01]
+    @test enc(Inst(:f64x2_relaxed_madd)) == [0xfd, 0x87, 0x02]
+    @test enc(Inst(:f32x4_extract_lane, 3)) == [0xfd, 0x1f, 0x03]
+    @test enc(Inst(:i8x16_shuffle, 0:15...)) == UInt8[0xfd; 0x0d; 0:15]
+    wat = sprint(print_wat, m)
+    for s in ("f64x2.splat", "f64x2.replace_lane 1", "i8x16.shuffle 8 9 10", "f32x4.relaxed_madd", "f64x2.extract_lane 0")
+        @test occursin(s, wat)
+    end
+end
+
 @testset "function types of imports match other modules' (recursion groups)" begin
     # an engine checks an imported function's type against the provider's: under
     # iso-recursive type equality they are equal only if both are recursion groups of the same

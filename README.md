@@ -72,7 +72,7 @@ emit!(b, :i32_eqz)
   constant expressions of globals, tags, exports, the start function.
 
 See [DESIGN.md](DESIGN.md) for details, and what is not covered yet (tables and
-`call_indirect`, linear memory, SIMD).
+`call_indirect`, most of SIMD).
 
 ## Tests
 

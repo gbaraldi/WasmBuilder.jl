@@ -526,6 +526,7 @@ end
 function imm_ok(m::WModule, kind::Symbol, @nospecialize(x))
     (kind === :u32 || kind === :align || kind === :offset) && return x isa Integer && 0 <= x <= typemax(UInt32)
     kind === :memidx && return x isa Integer && x == 0
+    kind === :lane && return x isa Integer && 0 <= x <= 255
     kind === :i32 && return x isa Integer && typemin(Int32) <= x <= typemax(UInt32)
     kind === :i64 && return x isa Integer && typemin(Int64) <= x <= typemax(UInt64)
     (kind === :f32 || kind === :f64) && return x isa Real
@@ -543,7 +544,15 @@ function check_imms(b::Builder, op::Symbol, info::OpInfo, imms)
     for (k, x) in zip(info.imms, imms)
         imm_ok(b.mod, k, x) || verr(b, op, "invalid immediate of kind $k: $(typeof(x)) $(x isa Union{Number,Symbol,TypeRef} ? x : "")")
     end
+    # a lane index: below the lanes of the instruction's shape (a shuffle's, of two vectors' bytes)
+    if !isempty(info.imms) && info.imms[1] === :lane
+        n = op === :i8x16_shuffle ? 32 : lane_count(op)
+        all(x -> x < n, imms) || verr(b, op, "lane index out of range (lanes: $n)")
+    end
 end
+
+# the lanes of the shape that names the SIMD instruction `op` (`f64x2_extract_lane`: 2)
+lane_count(op::Symbol) = parse(Int, match(r"^[if](?:8|16|32|64)x(\d+)_", string(op))[1])
 
 function typecheck!(b::Builder, op::Symbol, imms)
     m = b.mod
