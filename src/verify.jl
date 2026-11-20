@@ -50,6 +50,7 @@ function verify(m::WModule)
         top = mem.index64 ? 2^48 : 65536
         0 <= mem.min <= top && (mem.max === nothing || mem.min <= mem.max <= top) ||
             merr("memory", :memory, "invalid limits $(mem.min)..$(something(mem.max, "")) (pages of 64 KiB, at most $top)")
+        mem.shared && mem.max === nothing && merr("memory", :memory, "a shared memory without a maximum")
     end
     names = Set{String}()
     for (name, item) in m.exports

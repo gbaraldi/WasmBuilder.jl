@@ -138,7 +138,8 @@ function print_wat(io::IO, m::WModule)
     end
     mem = m.memory
     if mem !== nothing
-        memtype = string("(memory ", mem.index64 ? "i64 " : "", mem.min, mem.max === nothing ? "" : " $(mem.max)", ")")
+        memtype = string("(memory ", mem.index64 ? "i64 " : "", mem.min, mem.max === nothing ? "" : " $(mem.max)",
+                         mem.shared ? " shared" : "", ")")
         println(io, "  ", mem.imported === nothing ? memtype :
                 "(import \"$(mem.imported[1])\" \"$(mem.imported[2])\" $memtype)")
     end

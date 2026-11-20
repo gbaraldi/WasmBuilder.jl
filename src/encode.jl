@@ -197,10 +197,10 @@ function write_locals(io::IO, ord::TypeOrder, locals::Vector{ValType})
     end
 end
 
-# the memory type: limits whose flags say whether there is a maximum (bit 0) and whether the
-# addresses are 64-bit (bit 2, memory64)
+# the memory type: limits whose flags say whether there is a maximum (bit 0), whether the memory
+# is shared (bit 1, threads) and whether the addresses are 64-bit (bit 2, memory64)
 function write_limits(io::IO, mem::LinearMemory)
-    write(io, UInt8(mem.max !== nothing) | (mem.index64 ? 0x04 : 0x00))
+    write(io, UInt8(mem.max !== nothing) | (mem.shared ? 0x02 : 0x00) | (mem.index64 ? 0x04 : 0x00))
     leb_u(io, mem.min)
     mem.max === nothing || leb_u(io, mem.max)
 end

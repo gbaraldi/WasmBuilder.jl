@@ -681,6 +681,59 @@ end
     @test verify(m2) === nothing
     m2.memory.index64 = false
     @test_throws WasmValidationError verify(m2)
+    # a 64-bit memory without a maximum: limits flags 0x04, defined and imported, and the
+    # importer instantiated with the provider's
+    q = WModule()
+    add_export!(q, "memory", add_memory!(q, 2; index64=true))
+    qi = WModule()
+    add_memory!(qi, 1; index64=true, imported=("q", "memory"))
+    build(qi, "size", ValType[], ValType[I64]) do b
+        emit!(b, :memory_size, 0)
+    end
+    qb, qib = to_bytes(q), to_bytes(qi)
+    @test checkvalid(qb) && checkvalid(qib)
+    @test findfirst(UInt8[0x05, 0x03, 0x01, 0x04, 0x02], qb) !== nothing   # memory section (3 bytes): 1 memory, 0x04, 2
+    @test findfirst(UInt8[0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x04, 0x01], qib) !== nothing   # import: memory, 0x04, 1
+    @test occursin("(import \"q\" \"memory\" (memory i64 1))", sprint(print_wat, qi))
+    write(joinpath(dir, "q.wasm"), qb); write(joinpath(dir, "qi.wasm"), qib)
+    write(joinpath(dir, "runq.js"), """
+    const fs = require('fs');
+    (async () => {
+      const q = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "q.wasm"))'), {});
+      const m = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "qi.wasm"))'), { q: { memory: q.instance.exports.memory } });
+      console.log(m.instance.exports.size());
+    })().catch((e) => console.log(e.constructor.name, e.message));
+    """)
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "runq.js"))`, String)) == "2n"
+    # a shared memory: it must have a maximum; flags 0x03 (0x07 of a 64-bit one); an engine
+    # imports a shared memory into it, and not into a memory type that is not shared
+    @test_throws "a shared memory must have a maximum" add_memory!(WModule(), 1; shared=true)
+    bad = WModule()
+    bad.memory = W.LinearMemory(1, nothing, false, nothing, true)
+    @test_throws WasmValidationError verify(bad)
+    mk(shared) = (s = WModule(); add_memory!(s, 1; max=2, shared, imported=("js", "mem"));
+                  build(b -> (emit!(b, :i32_const, 8); emit!(b, :i32_load, 2, 0)), s, "get", ValType[], ValType[I32]); s)
+    sb, nb = to_bytes(mk(true)), to_bytes(mk(false))
+    @test checkvalid(sb) && checkvalid(nb)
+    @test findfirst(UInt8[0x02, 0x03, 0x01, 0x02], sb) !== nothing
+    @test occursin("(memory 1 2 shared)", sprint(print_wat, mk(true)))
+    s64 = WModule()
+    add_memory!(s64, 1; max=2, shared=true, index64=true)
+    @test findfirst(UInt8[0x05, 0x04, 0x01, 0x07, 0x01, 0x02], to_bytes(s64)) !== nothing
+    write(joinpath(dir, "s.wasm"), sb); write(joinpath(dir, "n.wasm"), nb)
+    write(joinpath(dir, "runs.js"), """
+    const fs = require('fs');
+    (async () => {
+      const mem = new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true });
+      new Int32Array(mem.buffer)[2] = 77;
+      const s = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "s.wasm"))'), { js: { mem } });
+      let n = 'instantiated';
+      try { await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "n.wasm"))'), { js: { mem } }); }
+      catch (e) { n = e.constructor.name; }
+      console.log(s.instance.exports.get(), n);
+    })().catch((e) => console.log(e.constructor.name, e.message));
+    """)
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "runs.js"))`, String)) == "77 LinkError"
     # an offset past 4 GiB in a 32-bit memory
     m3 = WModule()
     add_memory!(m3, 1)
