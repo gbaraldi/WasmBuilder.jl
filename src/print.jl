@@ -137,7 +137,11 @@ function print_wat(io::IO, m::WModule)
         println(io, "  )")
     end
     mem = m.memory
-    mem === nothing || println(io, "  (memory ", mem.min, mem.max === nothing ? "" : " $(mem.max)", ")")
+    if mem !== nothing
+        memtype = string("(memory ", mem.index64 ? "i64 " : "", mem.min, mem.max === nothing ? "" : " $(mem.max)", ")")
+        println(io, "  ", mem.imported === nothing ? memtype :
+                "(import \"$(mem.imported[1])\" \"$(mem.imported[2])\" $memtype)")
+    end
     for g in m.globals
         print(io, "  (global \$", g.name, " ", g.mutable ? "(mut " : "")
         show_valtype(io, ord, g.type)

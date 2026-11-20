@@ -54,6 +54,17 @@ including after calls to other functions were emitted. This avoids a relocation 
 `add_import!` deduplicates by name and signature: the same name imported at another
 signature is another import (a JavaScript function can be imported at several types).
 
+### Linear memory
+
+A module has at most one linear memory (`add_memory!`), defined or imported (`imported =
+(module, name)`): a GC-language module has no use of its own for one but to exchange bytes
+with a host, or to share the memory of a C library compiled to Wasm, which defines it and whose
+functions the module imports. A memory is 32- or 64-bit (`index64`, the memory64 proposal, as
+C compiled for `wasm64` uses): the builder checks the addresses and sizes of the loads, stores,
+`memory.size`, `memory.grow`, `memory.copy` and `memory.fill` against it (`i32` or `i64`,
+`MEMORY_OPS`), and a 32-bit memory's offsets against 2^32. The instructions table keeps one
+signature per instruction (the 32-bit one).
+
 ## The builder
 
 `Builder(m, f)` validates each instruction as it is appended, with the validation

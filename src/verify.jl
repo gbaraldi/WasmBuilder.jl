@@ -46,8 +46,10 @@ function verify(m::WModule)
     end
     mem = m.memory
     if mem !== nothing
-        0 <= mem.min <= 65536 && (mem.max === nothing || mem.min <= mem.max <= 65536) ||
-            merr("memory", :memory, "invalid limits $(mem.min)..$(something(mem.max, "")) (pages of 64 KiB, at most 65536)")
+        # (pages of 64 KiB: at most 4 GiB of a 32-bit memory, 2^64 bytes of a 64-bit one)
+        top = mem.index64 ? 2^48 : 65536
+        0 <= mem.min <= top && (mem.max === nothing || mem.min <= mem.max <= top) ||
+            merr("memory", :memory, "invalid limits $(mem.min)..$(something(mem.max, "")) (pages of 64 KiB, at most $top)")
     end
     names = Set{String}()
     for (name, item) in m.exports

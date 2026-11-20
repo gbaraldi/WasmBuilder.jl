@@ -524,7 +524,9 @@ function check_field_read(b, op, f::FieldType)
 end
 
 function imm_ok(m::WModule, kind::Symbol, @nospecialize(x))
-    (kind === :u32 || kind === :align || kind === :offset) && return x isa Integer && 0 <= x <= typemax(UInt32)
+    (kind === :u32 || kind === :align) && return x isa Integer && 0 <= x <= typemax(UInt32)
+    # (a memarg's offset: a u64 for a 64-bit memory, checked against the memory by `typecheck!`)
+    kind === :offset && return x isa Integer && 0 <= x <= typemax(UInt64)
     kind === :memidx && return x isa Integer && x == 0
     kind === :lane && return x isa Integer && 0 <= x <= 255
     kind === :i32 && return x isa Integer && typemin(Int32) <= x <= typemax(UInt32)
@@ -559,10 +561,23 @@ function typecheck!(b::Builder, op::Symbol, imms)
     info = get(INSTRUCTIONS, op, nothing)
     info === nothing && verr(b, op, "unknown instruction")
     check_imms(b, op, info, imms)
-    if haskey(MEMORY_ACCESSES, op) || op === :memory_size || op === :memory_grow
-        m.memory === nothing && verr(b, op, "the module has no memory")
+    addrs = get(MEMORY_OPS, op, nothing)
+    if addrs !== nothing
+        mem = m.memory
+        mem === nothing && verr(b, op, "the module has no memory")
         a = get(MEMORY_ACCESSES, op, nothing)
         a === nothing || imms[1] <= a || verr(b, op, "alignment 2^$(imms[1]) exceeds the natural alignment 2^$a")
+        a === nothing || mem.index64 || imms[2] <= typemax(UInt32) ||
+            verr(b, op, "offset $(imms[2]) of a 32-bit memory exceeds 2^32 - 1")
+        if mem.index64
+            # (the addresses and sizes of a 64-bit memory are i64s)
+            params, results = copy(info.sig[1]), copy(info.sig[2])
+            params[addrs[1]] .= I64
+            results[addrs[2]] .= I64
+            pop_ts!(b, op, params)
+            push_ts!(b, results)
+            return
+        end
     end
     if info.sig !== nothing
         pop_ts!(b, op, info.sig[1])

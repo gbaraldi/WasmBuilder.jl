@@ -48,11 +48,22 @@ mutable struct Tag
     type::TypeRef
 end
 
-"The module's linear memory: its limits, in pages of 64 KiB."
+"""
+    LinearMemory
+
+The module's linear memory: its limits, in pages of 64 KiB, whether its addresses are `i64`s
+(`index64`, memory64) rather than `i32`s, and for an imported memory, `(module, name)`.
+"""
 mutable struct LinearMemory
     min::Int
     max::Union{Nothing,Int}
+    index64::Bool
+    imported::Union{Nothing,Tuple{String,String}}
 end
+LinearMemory(min::Integer, max::Union{Nothing,Integer}) = LinearMemory(min, max, false, nothing)
+
+"The type of the addresses of the memory `mem`: `I64` for a 64-bit memory, else `I32`."
+address_type(mem::LinearMemory) = mem.index64 ? I64 : I32
 
 """
     WModule()
@@ -143,14 +154,20 @@ function add_tag!(m::WModule, params::Vector{ValType})
 end
 
 """
-    add_memory!(m, min; max=nothing) -> LinearMemory
+    add_memory!(m, min; max=nothing, index64=false, imported=nothing) -> LinearMemory
 
 Add the module's linear memory, of `min` pages of 64 KiB (growing to at most `max`). A
-module has one memory at most; the load and store instructions address it.
+module has one memory at most; the load and store instructions address it. With
+`index64` it is a 64-bit memory (memory64): addresses, sizes and `memory.grow`'s operand
+are `i64`s. With `imported = (module, name)` the memory is not defined by the module but
+imported, with these limits as the least the provided memory must satisfy (as a C module
+compiled to Wasm provides the memory its functions use).
 """
-function add_memory!(m::WModule, min::Integer; max::Union{Nothing,Integer}=nothing)
+function add_memory!(m::WModule, min::Integer; max::Union{Nothing,Integer}=nothing,
+                     index64::Bool=false, imported::Union{Nothing,Tuple{AbstractString,AbstractString}}=nothing)
     m.memory === nothing || throw(ArgumentError("the module has a memory already"))
-    return m.memory = LinearMemory(min, max)
+    imp = imported === nothing ? nothing : (String(imported[1]), String(imported[2]))
+    return m.memory = LinearMemory(min, max, index64, imp)
 end
 
 "Add a passive data segment, returning its index."

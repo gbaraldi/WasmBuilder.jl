@@ -197,8 +197,10 @@ function write_locals(io::IO, ord::TypeOrder, locals::Vector{ValType})
     end
 end
 
+# the memory type: limits whose flags say whether there is a maximum (bit 0) and whether the
+# addresses are 64-bit (bit 2, memory64)
 function write_limits(io::IO, mem::LinearMemory)
-    write(io, mem.max === nothing ? 0x00 : 0x01)
+    write(io, UInt8(mem.max !== nothing) | (mem.index64 ? 0x04 : 0x00))
     leb_u(io, mem.min)
     mem.max === nothing || leb_u(io, mem.max)
 end
@@ -230,18 +232,26 @@ function to_bytes(m::WModule; verify::Bool=true)
             ord.filler && write_subtype(s, ord, FILLER_TYPE)
         end
     end
-    isempty(imports) || write_section(io, 2) do s
-        write_vec(s, imports) do s, f
+    memimport = m.memory !== nothing && m.memory.imported !== nothing
+    (isempty(imports) && !memimport) || write_section(io, 2) do s
+        leb_u(s, length(imports) + memimport)
+        for f in imports
             write_name(s, f.imported[1])
             write_name(s, f.imported[2])
             write(s, 0x00)
             leb_u(s, type_index(ord, f.type))
         end
+        if memimport
+            write_name(s, m.memory.imported[1])
+            write_name(s, m.memory.imported[2])
+            write(s, 0x02)
+            write_limits(s, m.memory)
+        end
     end
     write_section(io, 3) do s
         write_vec((s, f) -> leb_u(s, type_index(ord, f.type)), s, defined)
     end
-    m.memory === nothing || write_section(io, 5) do s
+    m.memory === nothing || memimport || write_section(io, 5) do s
         leb_u(s, 1)
         write_limits(s, m.memory)
     end
