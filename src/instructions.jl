@@ -15,6 +15,13 @@ const INSTRUCTIONS = Dict{Symbol,OpInfo}()
 "The natural alignment (log2 of bytes) of each load and store of the linear memory."
 const MEMORY_ACCESSES = Dict{Symbol,Int}()
 
+"""
+The instructions of the linear memory, with the positions (1-based) of their operands and
+results that are addresses or sizes: `i32`s in the table's signatures, `i64`s for a 64-bit
+memory (memory64).
+"""
+const MEMORY_OPS = Dict{Symbol,Tuple{Vector{Int},Vector{Int}}}()
+
 # the first components of the names written with a `.` in the text format
 const TEXT_NAMESPACES = Set(["i32", "i64", "f32", "f64", "v128", "i8x16", "i16x8", "i32x4",
                              "i64x2", "f32x4", "f64x2", "local", "global", "ref", "struct",
@@ -101,15 +108,25 @@ let
                                       (:i64_load32_s, I64, 2), (:i64_load32_u, I64, 2)))
         definst!(op, 0x28 + i - 1, (:align, :offset); sig=fixedsig((I32,), (t,)))
         MEMORY_ACCESSES[op] = a
+        MEMORY_OPS[op] = ([1], Int[])
     end
     for (i, (op, t, a)) in enumerate(((:i32_store, I32, 2), (:i64_store, I64, 3), (:f32_store, F32, 2),
                                       (:f64_store, F64, 3), (:i32_store8, I32, 0), (:i32_store16, I32, 1),
                                       (:i64_store8, I64, 0), (:i64_store16, I64, 1), (:i64_store32, I64, 2)))
         definst!(op, 0x36 + i - 1, (:align, :offset); sig=fixedsig((I32, t), ()))
         MEMORY_ACCESSES[op] = a
+        MEMORY_OPS[op] = ([1], Int[])
     end
     definst!(:memory_size, 0x3f, (:memidx,); sig=fixedsig((), (I32,)))
     definst!(:memory_grow, 0x40, (:memidx,); sig=fixedsig((I32,), (I32,)))
+    # bulk memory: `memory.copy` (destination, source, length; the two memories' indices) and
+    # `memory.fill` (destination, byte, length)
+    definst!(:memory_copy, (0xfc, 10), (:memidx, :memidx); sig=fixedsig((I32, I32, I32), ()))
+    definst!(:memory_fill, (0xfc, 11), (:memidx,); sig=fixedsig((I32, I32, I32), ()))
+    MEMORY_OPS[:memory_size] = (Int[], [1])
+    MEMORY_OPS[:memory_grow] = ([1], [1])
+    MEMORY_OPS[:memory_copy] = ([1, 2, 3], Int[])
+    MEMORY_OPS[:memory_fill] = ([1, 3], Int[])
 
     # numeric
     definst!(:i32_const, 0x41, (:i32,); sig=fixedsig((), (I32,)))

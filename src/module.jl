@@ -48,11 +48,28 @@ mutable struct Tag
     type::TypeRef
 end
 
-"The module's linear memory: its limits, in pages of 64 KiB."
+"""
+    LinearMemory
+
+The module's linear memory: its limits, in pages of 64 KiB, whether its addresses are `i64`s
+(`index64`, memory64) rather than `i32`s, for an imported memory `(module, name)`, and whether
+it is shared (`shared`, the threads proposal: a memory several agents may access, which must
+have a maximum). `index64` is fixed at construction: the bodies built against the memory were
+checked with its address type.
+"""
 mutable struct LinearMemory
-    min::Int
-    max::Union{Nothing,Int}
+    min::Int64
+    max::Union{Nothing,Int64}
+    const index64::Bool
+    imported::Union{Nothing,Tuple{String,String}}
+    shared::Bool
 end
+LinearMemory(min::Integer, max::Union{Nothing,Integer}) = LinearMemory(min, max, false, nothing, false)
+LinearMemory(min::Integer, max::Union{Nothing,Integer}, index64::Bool, imported) =
+    LinearMemory(min, max, index64, imported, false)
+
+"The type of the addresses of the memory `mem`: `I64` for a 64-bit memory, else `I32`."
+address_type(mem::LinearMemory) = mem.index64 ? I64 : I32
 
 """
     WModule()
@@ -143,14 +160,26 @@ function add_tag!(m::WModule, params::Vector{ValType})
 end
 
 """
-    add_memory!(m, min; max=nothing) -> LinearMemory
+    add_memory!(m, min; max=nothing, index64=false, imported=nothing) -> LinearMemory
 
 Add the module's linear memory, of `min` pages of 64 KiB (growing to at most `max`). A
-module has one memory at most; the load and store instructions address it.
+module has one memory at most; the load and store instructions address it. With
+`index64` it is a 64-bit memory (memory64): addresses, sizes and `memory.grow`'s operand
+are `i64`s. With `imported = (module, name)` the memory is not defined by the module but
+imported, with these limits as the least the provided memory must satisfy (as a C module
+compiled to Wasm provides the memory its functions use). With `shared` it is a shared memory
+(the threads proposal: as a C module built with threads, emscripten's `-pthread`, defines it),
+which must have a maximum; an engine imports a shared memory only into a shared memory type,
+and a non-shared one only into a non-shared one. (The module's own instructions are the same
+for both: atomic accesses are not among WasmBuilder's instructions.)
 """
-function add_memory!(m::WModule, min::Integer; max::Union{Nothing,Integer}=nothing)
+function add_memory!(m::WModule, min::Integer; max::Union{Nothing,Integer}=nothing,
+                     index64::Bool=false, imported::Union{Nothing,Tuple{AbstractString,AbstractString}}=nothing,
+                     shared::Bool=false)
     m.memory === nothing || throw(ArgumentError("the module has a memory already"))
-    return m.memory = LinearMemory(min, max)
+    shared && max === nothing && throw(ArgumentError("a shared memory must have a maximum"))
+    imp = imported === nothing ? nothing : (String(imported[1]), String(imported[2]))
+    return m.memory = LinearMemory(min, max, index64, imp, shared)
 end
 
 "Add a passive data segment, returning its index."

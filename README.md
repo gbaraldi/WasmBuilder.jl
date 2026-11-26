@@ -10,7 +10,9 @@ compiler for a garbage-collected language targets:
 - the GC proposal: structs, arrays, subtyping, `ref.test`/`ref.cast`, `i31`;
 - typed function references, multi-value;
 - exception handling (the `exnref` version: `try_table`, `throw`, `throw_ref`);
-- passive data segments (`array.new_data`, `array.init_data`), start functions.
+- passive data segments (`array.new_data`, `array.init_data`), start functions;
+- a linear memory, defined or imported, 32- or 64-bit (memory64), with bulk `memory.copy` and
+  `memory.fill`.
 
 It has no dependencies and does not need an external toolchain. If `wasm-tools` is
 installed, `validate` and `disassemble` use it for a second opinion. The first user is

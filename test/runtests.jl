@@ -607,6 +607,141 @@ end
     @test_throws WasmValidationError verify(m2)
 end
 
+@testset "imported 64-bit memory (memory64), bulk memory" begin
+    # a provider defining a 64-bit memory and reading it, and a module importing it
+    p = WModule()
+    pmem = add_memory!(p, 1; max=4, index64=true)
+    build(p, "get", ValType[I64], ValType[I64]) do b
+        emit!(b, :local_get, 0); emit!(b, :i64_load, 3, 0)
+    end
+    add_export!(p, "memory", pmem)
+
+    m = WModule()
+    mem = add_memory!(m, 1; max=4, index64=true, imported=("p", "memory"))
+    @test mem.imported == ("p", "memory") && W.address_type(mem) === I64
+    # 32-bit addresses and sizes are not a 64-bit memory's
+    @test fails(b -> (emit!(b, :i32_const, 0); emit!(b, :i32_load, 2, 0); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :i32_const, 0); emit!(b, :i32_const, 1); emit!(b, :i32_store, 2, 0)), m)
+    @test fails(b -> (emit!(b, :memory_size, 0); emit!(b, :i32_eqz); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :i32_const, 1); emit!(b, :memory_grow, 0); emit!(b, :drop)), m)
+    @test fails(b -> (emit!(b, :i64_const, 0); emit!(b, :i32_const, 0); emit!(b, :i32_const, 1); emit!(b, :memory_fill, 0)), m)
+    @test !fails(b -> (emit!(b, :i64_const, 0); emit!(b, :i32_const, 0); emit!(b, :i64_const, 1); emit!(b, :memory_fill, 0)), m)
+    # (an offset past 4 GiB is a 64-bit memory's)
+    @test !fails(b -> (emit!(b, :i64_const, 0); emit!(b, :i32_load8_u, 0, Int64(1) << 33); emit!(b, :drop)), m)
+    # store x at a and x + 1 at a + 8 (offset 8), fill the 8 bytes before a with 0x11, copy the
+    # 16 bytes from a to a + 64; the sum of the i64 at a + 72 and of the byte at a - 1
+    build(m, "rw", ValType[I64, I64], ValType[I64]) do b
+        emit!(b, :local_get, 0); emit!(b, :local_get, 1); emit!(b, :i64_store, 3, 0)
+        emit!(b, :local_get, 0); emit!(b, :local_get, 1); emit!(b, :i64_const, 1); emit!(b, :i64_add)
+        emit!(b, :i64_store, 3, 8)
+        emit!(b, :local_get, 0); emit!(b, :i64_const, 8); emit!(b, :i64_sub)
+        emit!(b, :i32_const, 0x11); emit!(b, :i64_const, 8); emit!(b, :memory_fill, 0)
+        emit!(b, :local_get, 0); emit!(b, :i64_const, 64); emit!(b, :i64_add)
+        emit!(b, :local_get, 0); emit!(b, :i64_const, 16); emit!(b, :memory_copy, 0, 0)
+        emit!(b, :local_get, 0); emit!(b, :i64_load, 3, 72)
+        emit!(b, :local_get, 0); emit!(b, :i64_const, 1); emit!(b, :i64_sub); emit!(b, :i64_load8_u, 0, 0)
+        emit!(b, :i64_add)
+    end
+    # grow by one page: the old size, then the new one (pages, i64s)
+    build(m, "grow", ValType[], ValType[I64]) do b
+        emit!(b, :i64_const, 1); emit!(b, :memory_grow, 0)
+        emit!(b, :i64_const, 10); emit!(b, :i64_mul)
+        emit!(b, :memory_size, 0); emit!(b, :i64_add)
+    end
+    pb, mb = to_bytes(p), to_bytes(m)
+    @test checkvalid(pb) && checkvalid(mb)
+    enc(i) = (io = IOBuffer(); W.write_inst(io, W.TypeOrder(m), i); take!(io))
+    @test enc(Inst(:memory_copy, 0, 0)) == [0xfc, 0x0a, 0x00, 0x00]
+    @test enc(Inst(:memory_fill, 0)) == [0xfc, 0x0b, 0x00]
+    @test enc(Inst(:i64_load, 3, Int64(1) << 33)) == [0x29, 0x03, 0x80, 0x80, 0x80, 0x80, 0x20]
+    # the import's memory type: limits flags 0x05 (a maximum, 64-bit), 1, 4
+    @test findfirst(UInt8[0x01, 0x70, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x05, 0x01, 0x04], mb) !== nothing
+    wat = sprint(print_wat, m)
+    @test occursin("(import \"p\" \"memory\" (memory i64 1 4))", wat)
+    @test occursin("memory.copy 0 0", wat) && occursin("memory.fill 0", wat)
+    @test occursin("(memory i64 1 4)", sprint(print_wat, p))
+    HAS_WASM_TOOLS && @test occursin("(import \"p\" \"memory\" (memory (;0;) i64 1 4))", W.disassemble(mb))
+    dir = mktempdir()
+    write(joinpath(dir, "p.wasm"), pb); write(joinpath(dir, "m.wasm"), mb)
+    write(joinpath(dir, "run.js"), """
+    const fs = require('fs');
+    (async () => {
+      const p = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "p.wasm"))'), {});
+      const m = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "m.wasm"))'), { p: { memory: p.instance.exports.memory } });
+      const e = m.instance.exports;
+      const r = e.rw(1024n, 40n);
+      console.log(r, p.instance.exports.get(1096n), new Uint8Array(p.instance.exports.memory.buffer)[1016], e.grow());
+    })().catch((e) => console.log(e.constructor.name, e.message));
+    """)
+    # 41 + 0x11; the provider reads what the importer copied; the filled byte; 1 * 10 + 2
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "run.js"))`, String)) == "58n 41n 17 12n"
+    # limits of a 64-bit memory: above 2^16 pages, up to 2^48
+    m2 = WModule()
+    add_memory!(m2, 70000; index64=true)
+    @test verify(m2) === nothing
+    m32 = WModule()
+    add_memory!(m32, 70000)
+    @test_throws WasmValidationError verify(m32)
+    # a 64-bit memory without a maximum: limits flags 0x04, defined and imported, and the
+    # importer instantiated with the provider's
+    q = WModule()
+    add_export!(q, "memory", add_memory!(q, 2; index64=true))
+    qi = WModule()
+    add_memory!(qi, 1; index64=true, imported=("q", "memory"))
+    build(qi, "size", ValType[], ValType[I64]) do b
+        emit!(b, :memory_size, 0)
+    end
+    qb, qib = to_bytes(q), to_bytes(qi)
+    @test checkvalid(qb) && checkvalid(qib)
+    @test findfirst(UInt8[0x05, 0x03, 0x01, 0x04, 0x02], qb) !== nothing   # memory section (3 bytes): 1 memory, 0x04, 2
+    @test findfirst(UInt8[0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x04, 0x01], qib) !== nothing   # import: memory, 0x04, 1
+    @test occursin("(import \"q\" \"memory\" (memory i64 1))", sprint(print_wat, qi))
+    write(joinpath(dir, "q.wasm"), qb); write(joinpath(dir, "qi.wasm"), qib)
+    write(joinpath(dir, "runq.js"), """
+    const fs = require('fs');
+    (async () => {
+      const q = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "q.wasm"))'), {});
+      const m = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "qi.wasm"))'), { q: { memory: q.instance.exports.memory } });
+      console.log(m.instance.exports.size());
+    })().catch((e) => console.log(e.constructor.name, e.message));
+    """)
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "runq.js"))`, String)) == "2n"
+    # a shared memory: it must have a maximum; flags 0x03 (0x07 of a 64-bit one); an engine
+    # imports a shared memory into it, and not into a memory type that is not shared
+    @test_throws "a shared memory must have a maximum" add_memory!(WModule(), 1; shared=true)
+    bad = WModule()
+    bad.memory = W.LinearMemory(1, nothing, false, nothing, true)
+    @test_throws WasmValidationError verify(bad)
+    mk(shared) = (s = WModule(); add_memory!(s, 1; max=2, shared, imported=("js", "mem"));
+                  build(b -> (emit!(b, :i32_const, 8); emit!(b, :i32_load, 2, 0)), s, "get", ValType[], ValType[I32]); s)
+    sb, nb = to_bytes(mk(true)), to_bytes(mk(false))
+    @test checkvalid(sb) && checkvalid(nb)
+    @test findfirst(UInt8[0x02, 0x03, 0x01, 0x02], sb) !== nothing
+    @test occursin("(memory 1 2 shared)", sprint(print_wat, mk(true)))
+    s64 = WModule()
+    add_memory!(s64, 1; max=2, shared=true, index64=true)
+    @test findfirst(UInt8[0x05, 0x04, 0x01, 0x07, 0x01, 0x02], to_bytes(s64)) !== nothing
+    write(joinpath(dir, "s.wasm"), sb); write(joinpath(dir, "n.wasm"), nb)
+    write(joinpath(dir, "runs.js"), """
+    const fs = require('fs');
+    (async () => {
+      const mem = new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true });
+      new Int32Array(mem.buffer)[2] = 77;
+      const s = await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "s.wasm"))'), { js: { mem } });
+      let n = 'instantiated';
+      try { await WebAssembly.instantiate(fs.readFileSync('$(joinpath(dir, "n.wasm"))'), { js: { mem } }); }
+      catch (e) { n = e.constructor.name; }
+      console.log(s.instance.exports.get(), n);
+    })().catch((e) => console.log(e.constructor.name, e.message));
+    """)
+    @test strip(read(`$(node_cmd()) $(joinpath(dir, "runs.js"))`, String)) == "77 LinkError"
+    # an offset past 4 GiB in a 32-bit memory
+    m3 = WModule()
+    add_memory!(m3, 1)
+    @test fails(b -> (emit!(b, :i32_const, 0); emit!(b, :i32_load8_u, 0, Int64(1) << 33); emit!(b, :drop)), m3)
+    @test fails(b -> (emit!(b, :i64_const, 0); emit!(b, :i32_load8_u, 0, 0); emit!(b, :drop)), m3)
+end
+
 @testset "SIMD" begin
     m = WModule()
     # (a, b) * (a, a) + (b, b) = (a^2 + b, ab + b), then (its lane 1, lane 0 of (a, a)) as two digits
