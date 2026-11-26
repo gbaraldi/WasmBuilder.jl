@@ -54,12 +54,13 @@ end
 The module's linear memory: its limits, in pages of 64 KiB, whether its addresses are `i64`s
 (`index64`, memory64) rather than `i32`s, for an imported memory `(module, name)`, and whether
 it is shared (`shared`, the threads proposal: a memory several agents may access, which must
-have a maximum).
+have a maximum). `index64` is fixed at construction: the bodies built against the memory were
+checked with its address type.
 """
 mutable struct LinearMemory
-    min::Int
-    max::Union{Nothing,Int}
-    index64::Bool
+    min::Int64
+    max::Union{Nothing,Int64}
+    const index64::Bool
     imported::Union{Nothing,Tuple{String,String}}
     shared::Bool
 end

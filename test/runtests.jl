@@ -679,8 +679,9 @@ end
     m2 = WModule()
     add_memory!(m2, 70000; index64=true)
     @test verify(m2) === nothing
-    m2.memory.index64 = false
-    @test_throws WasmValidationError verify(m2)
+    m32 = WModule()
+    add_memory!(m32, 70000)
+    @test_throws WasmValidationError verify(m32)
     # a 64-bit memory without a maximum: limits flags 0x04, defined and imported, and the
     # importer instantiated with the provider's
     q = WModule()

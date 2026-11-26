@@ -47,7 +47,7 @@ function verify(m::WModule)
     mem = m.memory
     if mem !== nothing
         # (pages of 64 KiB: at most 4 GiB of a 32-bit memory, 2^64 bytes of a 64-bit one)
-        top = mem.index64 ? 2^48 : 65536
+        top = mem.index64 ? Int64(2)^48 : 65536
         0 <= mem.min <= top && (mem.max === nothing || mem.min <= mem.max <= top) ||
             merr("memory", :memory, "invalid limits $(mem.min)..$(something(mem.max, "")) (pages of 64 KiB, at most $top)")
         mem.shared && mem.max === nothing && merr("memory", :memory, "a shared memory without a maximum")
